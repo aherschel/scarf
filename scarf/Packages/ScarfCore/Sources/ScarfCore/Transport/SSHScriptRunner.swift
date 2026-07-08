@@ -104,6 +104,12 @@ public enum SSHScriptRunner {
                         return await runLocally(script: script, timeout: timeout, cancelFlag: cancelFlag)
                     case .ssh(let config):
                         return await runOverSSH(script: script, config: config, timeout: timeout, cancelFlag: cancelFlag)
+                    case .asp:
+                        // ASP is a strictly non-shell transport — there is no
+                        // script/exec surface on an ASP session. Reaching here
+                        // is a wiring bug (an ASP context should never be routed
+                        // through the shell-script runner).
+                        return .connectFailure("ASP sessions have no shell; SSHScriptRunner is not applicable")
                     }
                     #else
                     return .connectFailure("SSHScriptRunner is only available on macOS")

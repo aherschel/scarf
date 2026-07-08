@@ -53,12 +53,49 @@ public struct SSHConfig: Sendable, Hashable, Codable {
     }
 }
 
+/// Connection parameters for a Hermes session managed by **ASP** (Agent
+/// Server Provider) — reached only over authenticated HTTP, never SSH or a
+/// shell. ASP runs the same Hermes harness on managed EC2 with process
+/// isolation + an on-box secret broker, and a hard `no_ssh_ingress` audit
+/// attestation: there is no filesystem or process surface to reach. Every
+/// Scarf action becomes a first-class, audited API call instead.
+public struct ASPConfig: Sendable, Hashable, Codable {
+    /// Base URL of the ASP control API, e.g.
+    /// `https://7th83qrmph.execute-api.us-west-2.amazonaws.com`. All routes
+    /// are formed as `{apiBaseURL}/servers/{sessionId}/…`.
+    public var apiBaseURL: URL
+    /// The ASP session (server) id this context is bound to. Slots into the
+    /// `/servers/{id}/…` path for every call.
+    public var sessionId: String
+    /// Bearer token presented as `Authorization: Bearer <token>` on every
+    /// request.
+    ///
+    /// **PROTOTYPE ONLY — a static string.** Production MUST source a
+    /// short-lived Cognito/SAML-issued JWT (ASP's control API is fronted by a
+    /// Cognito authorizer) and refresh it before expiry; it must NOT persist a
+    /// long-lived credential to disk. See `docs/asp-transport-prototype.md`.
+    public var bearerToken: String
+
+    public init(
+        apiBaseURL: URL,
+        sessionId: String,
+        bearerToken: String
+    ) {
+        self.apiBaseURL = apiBaseURL
+        self.sessionId = sessionId
+        self.bearerToken = bearerToken
+    }
+}
+
 /// Distinguishes a local installation (the user's own `~/.hermes`) from a
-/// remote one reached over SSH. Service behavior is identical in shape but
+/// remote one reached over SSH, or an **ASP**-managed session reached only
+/// over authenticated HTTP. Service behavior is identical in shape but
 /// dispatches to different I/O primitives in Phase 2.
 public enum ServerKind: Sendable, Hashable, Codable {
     case local
     case ssh(SSHConfig)
+    /// A Hermes session managed by ASP, reached over HTTP APIs (no shell).
+    case asp(ASPConfig)
 }
 
 /// The per-server value that flows through `.environment` and gets handed to
@@ -118,12 +155,25 @@ public struct ServerContext: Sendable, Hashable, Identifiable {
                 isRemote: true,
                 binaryHint: config.hermesBinaryHint
             )
+        case .asp(let config):
+            // ASP has no filesystem Scarf can see — the "home" here is a
+            // synthetic virtual root that never touches disk. `ASPTransport`
+            // routes on the trailing path component (e.g. `/config.yaml`),
+            // so the base only has to be stable + collision-free with any
+            // real local path. The `__asp__` sentinel guarantees that.
+            return HermesPathSet(
+                home: "/__asp__/\(config.sessionId)",
+                isRemote: true,
+                binaryHint: "hermes"
+            )
         }
     }
 
     public nonisolated var isRemote: Bool {
-        if case .ssh = kind { return true }
-        return false
+        switch kind {
+        case .local: return false
+        case .ssh, .asp: return true
+        }
     }
 
     /// Default parent directory under which `ProjectTemplateInstaller` lays
@@ -143,6 +193,10 @@ public struct ServerContext: Sendable, Hashable, Identifiable {
                !configured.trimmingCharacters(in: .whitespaces).isEmpty {
                 return configured
             }
+            return "~/projects"
+        case .asp:
+            // Project templating isn't part of the ASP prototype surface;
+            // return a plausible remote default so callers don't crash.
             return "~/projects"
         }
     }
@@ -169,6 +223,8 @@ public struct ServerContext: Sendable, Hashable, Identifiable {
                 return factory(id, config, displayName)
             }
             return SSHTransport(contextID: id, config: config, displayName: displayName)
+        case .asp(let config):
+            return ASPTransport(contextID: id, config: config, displayName: displayName)
         }
     }
 
