@@ -5,6 +5,38 @@ drive a Hermes session hosted by **ASP** (Agent Server Provider) over ASP's
 authenticated HTTP control API — with **no shell, no SSH, and no filesystem
 access**.
 
+> **Post-security-review update.** The mock contract below was validated Scarf-side,
+> then the ASP-side plan was taken through ASP's enterprise/security persona review
+> (ASP repo: `docs/SCARF-TRANSPORT-ENDPOINTS.md`,
+> `personas/reports/scarf-asp-transport-sentiment.md`). Verdict: **build read-only
+> first, defer chat.** The contract this prototype assumes differs from ASP's real
+> API in three ways, now settled:
+>
+> 1. **Config read/write reuse *existing* ASP endpoints** — `GET /servers/{id}`
+>    (structured, secret-free `Session.toPublic()`) for read, and
+>    `PUT /servers/{id}/config` with a JSON **`AgentConfigPatch`** (allowlisted,
+>    policy-gated, audited) for write. There is **no raw-YAML write** and **no
+>    `GET/PUT …/config` YAML file endpoint**. The transport's file-shaped
+>    `readFile/writeFile(config.yaml)` should map onto these structured calls
+>    (read: render a view from the `GET`; write: a structured patch) rather than a
+>    file surface. *Transport realignment is the next Scarf change; the mapping
+>    table below is updated to reflect the real endpoints.*
+> 2. **`GET /servers/{id}/sessions` is now real on ASP** (read-only, owner/tenant-
+>    admin-scoped, kill-switch-gated, `via:'scarf'`-audited, output-capped, over a
+>    fixed-command read-only SSM call — no SSH). This matches the transport's
+>    `runProcess("hermes", ["sessions","list"])` mapping.
+> 3. **Chat is deferred.** `POST /servers/{id}/chat` (SSM one-shot) was **blocked**
+>    (a chat prompt is user content that, for a HIPAA tenant, carries PHI, and SSM
+>    command strings/output are logged to CloudWatch). The locked lane is Hermes'
+>    existing **`:8642` OpenAI-compatible API server** (`/v1/chat/completions`, SSE,
+>    per-session Bearer) reached with a **short-lived Cognito-JWT-brokered
+>    credential** — behind the spend hard-stop + the P2 isolation plane. The
+>    prototype's SSE `chat(prompt:)` shape is close, but the endpoint + credential
+>    vending are ASP backend work still to come.
+>
+> The prototype code + mock below remain the Scarf-side demonstrator; treat the
+> config and chat mappings as the *target* the realignment will move to.
+
 ## Why a non-shell transport
 
 Scarf's two existing transports both assume shell + filesystem access:
